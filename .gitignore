@@ -1,0 +1,22 @@
+# .NET
+backend/TaskManager/bin/
+backend/TaskManager/obj/
+*.db
+*.db-shm
+*.db-wal
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.vs/
+.vscode/
+*.suo
+*.user
+*.sln.docstates
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
