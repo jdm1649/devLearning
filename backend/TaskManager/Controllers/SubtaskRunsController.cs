@@ -42,8 +42,17 @@ public class SubtaskRunsController : ControllerBase
             .FirstOrDefaultAsync(s => s.Id == subtaskId, ct);
         if (subtask is null) return NotFound();
 
-        var taskText = (subtask.TaskItem.Description ?? subtask.TaskItem.Title).Trim();
-        var prompt = BuildPrompt(subtask.Question, taskText);
+        var taskText = BuildTaskText(subtask.TaskItem, request.ContextSource);
+        if (string.IsNullOrWhiteSpace(taskText))
+        {
+            return BadRequest(new
+            {
+                error = "empty-task-context",
+                message = $"The selected context source ({request.ContextSource}) produced an empty string. Give the task a title or description first.",
+            });
+        }
+        var effectiveSystemPrompt = string.IsNullOrWhiteSpace(subtask.SystemPrompt) ? null : subtask.SystemPrompt.Trim();
+        var prompt = BuildPrompt(effectiveSystemPrompt, subtask.Question, taskText);
 
         var messages = new List<LMStudioChatMessage>
         {
@@ -86,6 +95,7 @@ public class SubtaskRunsController : ControllerBase
             SentTemperature = subtask.Temperature,
             SentMaxTokens = subtask.MaxTokens,
             SentTopP = subtask.TopP,
+            SystemPrompt = effectiveSystemPrompt,
             ResponseContent = chatResult.Content,
             StopReason = chatResult.StopReason,
             TokensPerSecond = chatResult.TokensPerSecond,
@@ -104,8 +114,40 @@ public class SubtaskRunsController : ControllerBase
         return SubtaskRunResponse.FromEntity(run);
     }
 
-    private static string BuildPrompt(string question, string taskText) =>
-        $"{question.Trim()}\n\nTASK:\n{taskText.Trim()}";
+    /// <summary>
+    /// Compose the single user message. When <paramref name="systemPrompt"/> is
+    /// non-null we emit a 3-section layout (SYSTEM / INSTRUCTION / TASK) instead
+    /// of the default 2-section (INSTRUCTION / TASK). We do this instead of
+    /// using a real <c>system</c> role because Mistral v0.3's chat template
+    /// refuses the system role and 400s the whole request.
+    /// </summary>
+    private static string BuildPrompt(string? systemPrompt, string question, string taskText)
+    {
+        if (systemPrompt is null)
+        {
+            return $"{question.Trim()}\n\nTASK:\n{taskText.Trim()}";
+        }
+        return $"[SYSTEM]\n{systemPrompt.Trim()}\n\n[INSTRUCTION]\n{question.Trim()}\n\n[TASK]\n{taskText.Trim()}";
+    }
+
+    private static string BuildTaskText(TaskItem task, RunContextSource source)
+    {
+        var title = (task.Title ?? string.Empty).Trim();
+        var description = (task.Description ?? string.Empty).Trim();
+
+        return source switch
+        {
+            RunContextSource.TitleOnly => title,
+            RunContextSource.DescriptionOnly => description,
+            RunContextSource.TitleAndDescription => string.IsNullOrEmpty(description)
+                ? title
+                : string.IsNullOrEmpty(title)
+                    ? description
+                    : $"{title}\n\n{description}",
+            RunContextSource.DescriptionWithTitleFallback => string.IsNullOrEmpty(description) ? title : description,
+            _ => description,
+        };
+    }
 
     /// <summary>
     /// Pessimistic char-based token estimate: matches the Python CLI guard

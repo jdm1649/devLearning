@@ -24,6 +24,9 @@ public class CreateSubtaskRequest
     public double? TopP { get; set; }
 
     [MaxLength(4000)]
+    public string? SystemPrompt { get; set; }
+
+    [MaxLength(4000)]
     public string? Notes { get; set; }
 }
 
@@ -46,6 +49,11 @@ public class UpdateSubtaskRequest
     [Range(0.0, 1.0)]
     public double? TopP { get; set; }
 
+    // NOTE: use "" (empty string) to clear a previously-set system prompt;
+    // null means "don't touch".
+    [MaxLength(4000)]
+    public string? SystemPrompt { get; set; }
+
     [MaxLength(4000)]
     public string? Notes { get; set; }
 }
@@ -60,6 +68,7 @@ public class SubtaskResponse
     public double Temperature { get; set; }
     public int MaxTokens { get; set; }
     public double? TopP { get; set; }
+    public string? SystemPrompt { get; set; }
     public string? Notes { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
@@ -74,16 +83,31 @@ public class SubtaskResponse
         Temperature = s.Temperature,
         MaxTokens = s.MaxTokens,
         TopP = s.TopP,
+        SystemPrompt = s.SystemPrompt,
         Notes = s.Notes,
         CreatedAt = s.CreatedAt,
         UpdatedAt = s.UpdatedAt,
     };
 }
 
+public enum RunContextSource
+{
+    /// <summary>
+    /// Backward-compatible default: use Description if present,
+    /// otherwise fall back to Title.
+    /// </summary>
+    DescriptionWithTitleFallback,
+    TitleOnly,
+    DescriptionOnly,
+    TitleAndDescription,
+}
+
 public class RunSubtaskRequest
 {
     [MaxLength(4000)]
     public string? UserNotes { get; set; }
+
+    public RunContextSource ContextSource { get; set; } = RunContextSource.DescriptionWithTitleFallback;
 }
 
 public class SubtaskRunResponse
@@ -96,6 +120,7 @@ public class SubtaskRunResponse
     public double SentTemperature { get; set; }
     public int SentMaxTokens { get; set; }
     public double? SentTopP { get; set; }
+    public string? SystemPrompt { get; set; }
     public string ResponseContent { get; set; } = string.Empty;
     public string? StopReason { get; set; }
     public double? TokensPerSecond { get; set; }
@@ -118,6 +143,7 @@ public class SubtaskRunResponse
         SentTemperature = r.SentTemperature,
         SentMaxTokens = r.SentMaxTokens,
         SentTopP = r.SentTopP,
+        SystemPrompt = r.SystemPrompt,
         ResponseContent = r.ResponseContent,
         StopReason = r.StopReason,
         TokensPerSecond = r.TokensPerSecond,

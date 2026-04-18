@@ -7,6 +7,34 @@ export type SubtaskKind =
   | 'NextDiagnosticStep'
   | 'ConfirmationPlan';
 
+export const SUBTASK_KINDS: SubtaskKind[] = [
+  'Restate',
+  'ExpectedBehavior',
+  'ActualBehavior',
+  'Categorize',
+  'FirstDiagnosticStep',
+  'NextDiagnosticStep',
+  'ConfirmationPlan',
+];
+
+/// Which part of the parent task is embedded in the prompt.
+export type RunContextSource =
+  | 'DescriptionWithTitleFallback'
+  | 'TitleOnly'
+  | 'DescriptionOnly'
+  | 'TitleAndDescription';
+
+export interface CreateSubtaskRequest {
+  kind: SubtaskKind;
+  order: number;
+  question: string;
+  temperature: number;
+  maxTokens: number;
+  topP: number | null;
+  systemPrompt: string | null;
+  notes: string | null;
+}
+
 export interface Subtask {
   id: number;
   taskItemId: number;
@@ -16,6 +44,7 @@ export interface Subtask {
   temperature: number;
   maxTokens: number;
   topP: number | null;
+  systemPrompt: string | null;
   notes: string | null;
   createdAt: string;
   updatedAt: string;
@@ -30,6 +59,7 @@ export interface SubtaskRun {
   sentTemperature: number;
   sentMaxTokens: number;
   sentTopP: number | null;
+  systemPrompt: string | null;
   responseContent: string;
   stopReason: string | null;
   tokensPerSecond: number | null;

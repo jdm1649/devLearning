@@ -1,4 +1,11 @@
-import type { ModelInfo, RunSubtaskError, Subtask, SubtaskRun } from '../types/agent';
+import type {
+  CreateSubtaskRequest,
+  ModelInfo,
+  RunContextSource,
+  RunSubtaskError,
+  Subtask,
+  SubtaskRun,
+} from '../types/agent';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5151/api';
 
@@ -38,11 +45,34 @@ export async function listRuns(subtaskId: number): Promise<SubtaskRun[]> {
   return handleResponse<SubtaskRun[]>(res);
 }
 
-export async function runSubtask(subtaskId: number, userNotes?: string): Promise<SubtaskRun> {
+export interface RunSubtaskOptions {
+  userNotes?: string | null;
+  contextSource?: RunContextSource;
+}
+
+export async function runSubtask(
+  subtaskId: number,
+  options: RunSubtaskOptions = {},
+): Promise<SubtaskRun> {
   const res = await fetch(`${API_BASE}/subtasks/${subtaskId}/runs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userNotes: userNotes ?? null }),
+    body: JSON.stringify({
+      userNotes: options.userNotes ?? null,
+      contextSource: options.contextSource ?? 'DescriptionWithTitleFallback',
+    }),
   });
   return handleResponse<SubtaskRun>(res);
+}
+
+export async function createSubtask(
+  taskId: number,
+  payload: CreateSubtaskRequest,
+): Promise<Subtask> {
+  const res = await fetch(`${API_BASE}/tasks/${taskId}/subtasks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return handleResponse<Subtask>(res);
 }

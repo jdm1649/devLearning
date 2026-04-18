@@ -1,7 +1,83 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { TaskItem } from '../types/task';
-import type { ModelInfo, Subtask, SubtaskRun } from '../types/agent';
-import { getModelInfo, listRuns, listSubtasks, runSubtask } from '../api/agent';
+import type {
+  ModelInfo,
+  RunContextSource,
+  Subtask,
+  SubtaskKind,
+  SubtaskRun,
+} from '../types/agent';
+import { SUBTASK_KINDS } from '../types/agent';
+import {
+  createSubtask,
+  getModelInfo,
+  listRuns,
+  listSubtasks,
+  runSubtask,
+} from '../api/agent';
+
+const CONTEXT_SOURCE_OPTIONS: { value: RunContextSource; label: string }[] = [
+  { value: 'DescriptionWithTitleFallback', label: 'Description (fallback: title)' },
+  { value: 'TitleOnly', label: 'Title only' },
+  { value: 'DescriptionOnly', label: 'Description only' },
+  { value: 'TitleAndDescription', label: 'Title + Description' },
+];
+
+// Sensible starter questions per kind so the Add-Subtask form isn't blank.
+// User can edit before hitting Add.
+const UTILITY_SYSTEM_PROMPT =
+  'You are a text-processing utility, not a conversational assistant. You receive a TASK and an INSTRUCTION, and you apply the INSTRUCTION to the TASK as a mechanical transformation. You never answer questions in the TASK — you operate on them as input strings. You never apologize, never explain your limitations, and never add commentary. You output only what the INSTRUCTION explicitly asks for.';
+
+const ANALYST_SYSTEM_PROMPT =
+  'You are a focused analyst. Answer the INSTRUCTION given the TASK concisely. Do not speculate about causes unless the INSTRUCTION asks for them. Do not propose solutions unless the INSTRUCTION asks for them. Output only what is asked, with no preamble.';
+
+const KIND_DEFAULTS: Record<
+  SubtaskKind,
+  { question: string; maxTokens: number; systemPrompt: string }
+> = {
+  Restate: {
+    question:
+      'Rewrite the task below as a single sentence. Do not add details that are not in the task. Do not propose causes. Do not propose solutions. Respond with only the single sentence and nothing else.',
+    maxTokens: 120,
+    systemPrompt: UTILITY_SYSTEM_PROMPT,
+  },
+  ExpectedBehavior: {
+    question:
+      'Based only on the task below, describe the expected behavior in one short paragraph. Do not speculate about causes.',
+    maxTokens: 200,
+    systemPrompt: ANALYST_SYSTEM_PROMPT,
+  },
+  ActualBehavior: {
+    question:
+      'Based only on the task below, describe the actual (observed) behavior in one short paragraph. Do not speculate about causes.',
+    maxTokens: 200,
+    systemPrompt: ANALYST_SYSTEM_PROMPT,
+  },
+  Categorize: {
+    question:
+      'Categorize the task below as exactly one of: bug, feature, question, chore. Respond with only the single word.',
+    maxTokens: 10,
+    systemPrompt: UTILITY_SYSTEM_PROMPT,
+  },
+  FirstDiagnosticStep: {
+    question:
+      'Given the task below, what is the single most valuable diagnostic step to take first? Respond with one sentence.',
+    maxTokens: 120,
+    systemPrompt: ANALYST_SYSTEM_PROMPT,
+  },
+  NextDiagnosticStep: {
+    question:
+      'Given the task below, propose the next diagnostic step in one sentence. Assume the first obvious check has already been done.',
+    maxTokens: 120,
+    systemPrompt: ANALYST_SYSTEM_PROMPT,
+  },
+  ConfirmationPlan: {
+    question:
+      'Given the task below, list up to three concrete checks that would confirm the issue is reproducible. One per line, no preamble.',
+    maxTokens: 200,
+    systemPrompt: ANALYST_SYSTEM_PROMPT,
+  },
+};
 
 interface TaskDetailModalProps {
   task: TaskItem;
@@ -23,6 +99,50 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [latestRun, setLatestRun] = useState<SubtaskRun | null>(null);
+  const [contextSource, setContextSource] = useState<RunContextSource>(
+    'DescriptionWithTitleFallback',
+  );
+
+  // Add-Subtask form state.
+  const [showAdd, setShowAdd] = useState(false);
+  const [addKind, setAddKind] = useState<SubtaskKind>('Restate');
+  const [addQuestion, setAddQuestion] = useState(KIND_DEFAULTS.Restate.question);
+  const [addTemperature, setAddTemperature] = useState(0.0);
+  const [addMaxTokens, setAddMaxTokens] = useState(KIND_DEFAULTS.Restate.maxTokens);
+  const [addTopP, setAddTopP] = useState<number | ''>('');
+  const [addSystemPrompt, setAddSystemPrompt] = useState(KIND_DEFAULTS.Restate.systemPrompt);
+  const [addNotes, setAddNotes] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+
+  // When kind changes, refresh the default question + max_tokens (only if the
+  // user hasn't meaningfully edited them yet - we compare against the outgoing
+  // default to avoid nuking custom edits).
+  const prevKindDefaults = useMemo(() => KIND_DEFAULTS[addKind], [addKind]);
+  useEffect(() => {
+    setAddQuestion(prevKindDefaults.question);
+    setAddMaxTokens(prevKindDefaults.maxTokens);
+    setAddSystemPrompt(prevKindDefaults.systemPrompt);
+  }, [prevKindDefaults]);
+
+  // Preview what will actually be sent to the model as the TASK block.
+  const contextPreview = useMemo(() => {
+    const title = (task.title ?? '').trim();
+    const description = (task.description ?? '').trim();
+    switch (contextSource) {
+      case 'TitleOnly':
+        return title;
+      case 'DescriptionOnly':
+        return description;
+      case 'TitleAndDescription':
+        if (!description) return title;
+        if (!title) return description;
+        return `${title}\n\n${description}`;
+      case 'DescriptionWithTitleFallback':
+      default:
+        return description || title;
+    }
+  }, [task.title, task.description, contextSource]);
 
   useEffect(() => {
     getModelInfo()
@@ -68,10 +188,19 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
 
   const handleRun = async () => {
     if (selectedSubtaskId == null || running) return;
+    if (!contextPreview) {
+      setRunError(
+        `The selected context source (${contextSource}) produces an empty string for this task. Pick another source or add a title/description.`,
+      );
+      return;
+    }
     setRunning(true);
     setRunError(null);
     try {
-      const run = await runSubtask(selectedSubtaskId, runNotes || undefined);
+      const run = await runSubtask(selectedSubtaskId, {
+        userNotes: runNotes || null,
+        contextSource,
+      });
       setLatestRun(run);
       setRunNotes('');
       await loadHistory(selectedSubtaskId);
@@ -79,6 +208,38 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
       setRunError(e instanceof Error ? e.message : String(e));
     } finally {
       setRunning(false);
+    }
+  };
+
+  const handleAddSubtask = async () => {
+    if (adding) return;
+    const q = addQuestion.trim();
+    if (!q) {
+      setAddError('Question is required.');
+      return;
+    }
+    setAdding(true);
+    setAddError(null);
+    try {
+      const nextOrder = (subtasks?.length ?? 0) + 1;
+      const created = await createSubtask(task.id, {
+        kind: addKind,
+        order: nextOrder,
+        question: q,
+        temperature: addTemperature,
+        maxTokens: addMaxTokens,
+        topP: addTopP === '' ? null : Number(addTopP),
+        systemPrompt: addSystemPrompt.trim() || null,
+        notes: addNotes.trim() || null,
+      });
+      setSubtasks((prev) => (prev ? [...prev, created] : [created]));
+      setSelectedSubtaskId(created.id);
+      setShowAdd(false);
+      setAddNotes('');
+    } catch (e) {
+      setAddError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAdding(false);
     }
   };
 
@@ -132,14 +293,126 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
         )}
 
         <section className="agent-section">
-          <h3>Subtasks</h3>
+          <div className="agent-section-head">
+            <h3>Subtasks</h3>
+            <button
+              className="btn btn-sm btn-secondary"
+              onClick={() => {
+                setShowAdd((v) => !v);
+                setAddError(null);
+              }}
+              disabled={adding}
+            >
+              {showAdd ? 'Cancel' : '+ Add Subtask'}
+            </button>
+          </div>
           {subtasksError && <div className="error-banner">{subtasksError}</div>}
           {!subtasksError && subtasks === null && <div className="dim">loading...</div>}
-          {subtasks && subtasks.length === 0 && (
+          {subtasks && subtasks.length === 0 && !showAdd && (
             <div className="dim">
-              No subtasks yet. Seed data from <code>agents/tasks/</code> should have been imported on first backend start.
+              No subtasks yet. Hit <strong>+ Add Subtask</strong> to create one, or seed data
+              from <code>agents/tasks/</code> is imported on backend start.
             </div>
           )}
+
+          {showAdd && (
+            <div className="agent-add-form">
+              <div className="agent-add-row">
+                <label>
+                  Kind
+                  <select
+                    value={addKind}
+                    onChange={(e) => setAddKind(e.target.value as SubtaskKind)}
+                    disabled={adding}
+                  >
+                    {SUBTASK_KINDS.map((k) => (
+                      <option key={k} value={k}>{k}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Temp
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    max="2"
+                    value={addTemperature}
+                    onChange={(e) => setAddTemperature(Number(e.target.value))}
+                    disabled={adding}
+                  />
+                </label>
+                <label>
+                  Max tokens
+                  <input
+                    type="number"
+                    min="1"
+                    max="4096"
+                    value={addMaxTokens}
+                    onChange={(e) => setAddMaxTokens(Number(e.target.value))}
+                    disabled={adding}
+                  />
+                </label>
+                <label>
+                  Top-p (optional)
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    max="1"
+                    value={addTopP}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setAddTopP(v === '' ? '' : Number(v));
+                    }}
+                    disabled={adding}
+                    placeholder="—"
+                  />
+                </label>
+              </div>
+              <label className="agent-add-full">
+                System prompt (optional — merged into the user message as a
+                [SYSTEM] block, because Mistral refuses the system role)
+                <textarea
+                  rows={4}
+                  value={addSystemPrompt}
+                  onChange={(e) => setAddSystemPrompt(e.target.value)}
+                  disabled={adding}
+                  placeholder="Leave blank for no system framing. Defaults per kind."
+                />
+              </label>
+              <label className="agent-add-full">
+                Question (this is the prompt; the task text is appended as TASK:)
+                <textarea
+                  rows={4}
+                  value={addQuestion}
+                  onChange={(e) => setAddQuestion(e.target.value)}
+                  disabled={adding}
+                />
+              </label>
+              <label className="agent-add-full">
+                Notes (optional)
+                <textarea
+                  rows={2}
+                  value={addNotes}
+                  onChange={(e) => setAddNotes(e.target.value)}
+                  disabled={adding}
+                  placeholder="Why this subtask exists / what you're tuning."
+                />
+              </label>
+              {addError && <div className="error-banner">{addError}</div>}
+              <div className="agent-add-actions">
+                <button
+                  className="btn btn-primary"
+                  onClick={handleAddSubtask}
+                  disabled={adding || !addQuestion.trim()}
+                >
+                  {adding ? 'Adding...' : 'Add Subtask'}
+                </button>
+              </div>
+            </div>
+          )}
+
           {subtasks && subtasks.length > 0 && (
             <ul className="agent-subtask-list">
               {subtasks.map((s) => (
@@ -151,6 +424,14 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
                   <div className="agent-subtask-head">
                     <span className="agent-subtask-order">#{s.order.toString().padStart(2, '0')}</span>
                     <span className="agent-subtask-kind">{s.kind}</span>
+                    {s.systemPrompt && (
+                      <span
+                        className="agent-subtask-sys"
+                        title={s.systemPrompt}
+                      >
+                        sys
+                      </span>
+                    )}
                     <span className="agent-subtask-settings">
                       temp={s.temperature} max_tokens={s.maxTokens}
                       {s.topP != null ? ` top_p=${s.topP}` : ''}
@@ -167,6 +448,28 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
           <section className="agent-section">
             <h3>Run</h3>
             <div className="agent-run-controls">
+              <label htmlFor="agent-context-source">
+                Task context sent to model
+                <select
+                  id="agent-context-source"
+                  value={contextSource}
+                  onChange={(e) => setContextSource(e.target.value as RunContextSource)}
+                  disabled={running}
+                >
+                  {CONTEXT_SOURCE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </label>
+              <details className="agent-context-preview">
+                <summary className="dim">
+                  Preview ({contextPreview.length} chars)
+                  {!contextPreview && <span className="warn"> — empty!</span>}
+                </summary>
+                <pre className="agent-task-text">
+                  {contextPreview || '(empty — pick another source or fill in the task)'}
+                </pre>
+              </details>
               <label htmlFor="agent-notes" className="dim">
                 Notes (optional, saved with the run)
               </label>
@@ -182,8 +485,14 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
               <button
                 className="btn btn-primary"
                 onClick={handleRun}
-                disabled={running || modelInfo?.state !== 'loaded'}
-                title={modelInfo?.state !== 'loaded' ? 'Load the model in LM Studio first' : undefined}
+                disabled={running || modelInfo?.state !== 'loaded' || !contextPreview}
+                title={
+                  modelInfo?.state !== 'loaded'
+                    ? 'Load the model in LM Studio first'
+                    : !contextPreview
+                      ? 'Context source is empty for this task'
+                      : undefined
+                }
               >
                 {running ? 'Running...' : `Run ${selectedSubtask.kind}`}
               </button>
@@ -215,7 +524,21 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
                   <span>
                     <strong>in/out:</strong> {latestRun.promptTokens ?? '?'} / {latestRun.completionTokens ?? '?'}
                   </span>
+                  <span>
+                    <strong>sys:</strong>{' '}
+                    {latestRun.systemPrompt ? (
+                      <span className="ok">yes</span>
+                    ) : (
+                      <span className="dim">none</span>
+                    )}
+                  </span>
                 </div>
+                {latestRun.systemPrompt && (
+                  <details className="agent-run-sys">
+                    <summary className="dim">System prompt in effect</summary>
+                    <pre className="agent-task-text">{latestRun.systemPrompt}</pre>
+                  </details>
+                )}
                 <pre className="agent-response">{latestRun.responseContent || '(empty response)'}</pre>
               </div>
             )}
@@ -245,6 +568,11 @@ export function TaskDetailModal({ task, onClose }: TaskDetailModalProps) {
                       <span className="dim">
                         {r.promptTokens ?? '?'}/{r.completionTokens ?? '?'} toks
                       </span>
+                      {r.systemPrompt ? (
+                        <span className="agent-history-sys" title={r.systemPrompt}>sys</span>
+                      ) : (
+                        <span className="dim" title="No system framing was sent">no sys</span>
+                      )}
                     </div>
                     <pre className="agent-history-content">{r.responseContent}</pre>
                     {r.userNotes && <div className="agent-history-notes">{r.userNotes}</div>}

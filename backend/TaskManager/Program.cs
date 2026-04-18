@@ -44,7 +44,7 @@ using (var scope = app.Services.CreateScope())
     db.Database.EnsureCreated();
 
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-    await AgentSeeder.SeedIfEmptyAsync(db, app.Environment, logger);
+    await AgentSeeder.EnsureSeedTasksAsync(db, app.Environment, logger);
 }
 
 if (app.Environment.IsDevelopment())

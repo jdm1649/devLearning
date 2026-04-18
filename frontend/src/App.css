@@ -820,3 +820,184 @@ body {
     min-width: auto;
   }
 }
+
+/* === A.5 additions === */
+
+.agent-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.agent-section-head h3 {
+  margin: 0;
+}
+
+.agent-add-form {
+  border: 1px solid var(--accent-dim);
+  border-radius: 6px;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.agent-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.agent-add-row label,
+.agent-add-full {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.agent-add-row label {
+  flex: 1 1 120px;
+  min-width: 120px;
+}
+
+.agent-add-full {
+  width: 100%;
+}
+
+.agent-add-form input,
+.agent-add-form select,
+.agent-add-form textarea {
+  background: var(--bg-input);
+  border: 1px solid var(--accent-dim);
+  color: var(--text-primary);
+  border-radius: 4px;
+  padding: 0.4rem 0.5rem;
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
+/* Native <option>s inherit the OS combobox theme by default, which is why
+   the dropdown rendered white/blue over our dark modal. Force them onto
+   our palette. Firefox/Chromium both honor this; Safari ignores it and
+   keeps its own native menu, which is fine. */
+.agent-add-form select option,
+.agent-run-controls select option {
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+
+.agent-add-form select option:checked,
+.agent-add-form select option:hover,
+.agent-run-controls select option:checked,
+.agent-run-controls select option:hover {
+  background: var(--accent-dim);
+  color: var(--text-primary);
+}
+
+.agent-add-form textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  resize: vertical;
+}
+
+.agent-add-form input:focus,
+.agent-add-form select:focus,
+.agent-add-form textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(132, 204, 22, 0.2);
+}
+
+.agent-add-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.agent-run-controls label[for="agent-context-source"] {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.agent-run-controls select {
+  background: var(--bg-input);
+  border: 1px solid var(--accent-dim);
+  color: var(--text-primary);
+  border-radius: 4px;
+  padding: 0.4rem 0.5rem;
+  font-family: inherit;
+  font-size: 0.9rem;
+  max-width: 360px;
+}
+
+.agent-run-controls select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(132, 204, 22, 0.2);
+}
+
+.agent-context-preview {
+  margin-bottom: 0.5rem;
+}
+
+.agent-context-preview summary {
+  cursor: pointer;
+  padding: 0.25rem 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.agent-context-preview summary:hover {
+  color: var(--text-secondary);
+}
+
+.agent-context-preview[open] summary {
+  color: var(--text-secondary);
+}
+
+.agent-context-preview .agent-task-text {
+  margin-top: 0.5rem;
+}
+
+/* === A.6 additions === */
+
+.agent-subtask-sys,
+.agent-history-sys {
+  display: inline-block;
+  padding: 0 0.4rem;
+  border-radius: 3px;
+  background: var(--accent-dim);
+  color: var(--text-primary);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: help;
+}
+
+.agent-run-sys {
+  margin: 0.5rem 0;
+}
+
+.agent-run-sys summary {
+  cursor: pointer;
+  padding: 0.25rem 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.agent-run-sys summary:hover {
+  color: var(--text-secondary);
+}
+
+.agent-run-sys[open] summary {
+  color: var(--text-secondary);
+}

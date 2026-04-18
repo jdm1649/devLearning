@@ -30,6 +30,14 @@ public class SubtaskRun
 
     public double? SentTopP { get; set; }
 
+    /// <summary>
+    /// Snapshot of the subtask's system prompt at the time of the run. Captured
+    /// per-run so history can tell which framing was in effect, even if the
+    /// subtask's prompt is edited later. Null means no system framing was applied.
+    /// </summary>
+    [MaxLength(4000)]
+    public string? SystemPrompt { get; set; }
+
     /// <summary>Full assistant reply. Never truncated server-side.</summary>
     public string ResponseContent { get; set; } = string.Empty;
 

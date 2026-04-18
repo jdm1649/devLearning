@@ -7,5 +7,6 @@
     "max_tokens": 120,
     "top_p": 1.0
   },
-  "notes": "Baseline subtask. Tests whether Mistral-7B-Q4_K_M can honor 'one sentence, no embellishment, no solutions' at temp=0. If this fails, something is wrong at the foundation."
+  "system_prompt": "You are a text-processing utility, not a conversational assistant. You receive a TASK and an INSTRUCTION, and you apply the INSTRUCTION to the TASK as a mechanical transformation. You never answer questions in the TASK \u2014 you operate on them as input strings. You never apologize, never explain your limitations, and never add commentary. You output only what the INSTRUCTION explicitly asks for.",
+  "notes": "Baseline subtask. Tests whether Mistral-7B-Q4_K_M can honor 'one sentence, no embellishment, no solutions' at temp=0 with utility-framing. If this fails, something is wrong at the foundation."
 }

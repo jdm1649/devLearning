@@ -7,49 +7,54 @@ using TaskManager.Models;
 namespace TaskManager.Services;
 
 /// <summary>
-/// One-time import: if the DB has no tasks at all, look for
-/// <c>agents/tasks/&lt;task_id&gt;/</c> seed folders relative to the repo root
-/// and import each into SQLite. Idempotent: skips seeding if any task exists.
+/// Keep the repo's canonical seed tasks (under <c>agents/tasks/</c>) present
+/// in the DB, idempotently. On every startup:
 ///
-/// This lets us migrate the Python-CLI-era task data into the UI-era SQLite
-/// without losing the work we did in the previous commit.
+/// <list type="bullet">
+///   <item>For each seed folder, look up the matching task by its
+///     <c>seed,&lt;task_id&gt;</c> tag (including soft-deleted rows).</item>
+///   <item>If missing, insert it.</item>
+///   <item>If present but soft-deleted, undelete it (so deleting from the UI
+///     just hides it until the next restart, which is the behavior the user
+///     asked for: deleted seed tasks come back on a backend start).</item>
+///   <item>If present and live, leave the task alone (don't clobber user
+///     edits to title/description). But re-insert any seed subtasks whose
+///     kind is not yet attached, so new seed subtasks added to disk in
+///     future commits flow in.</item>
+/// </list>
+///
+/// Non-seed tasks (created in the UI) are never touched.
 /// </summary>
 public static class AgentSeeder
 {
-    public static async Task SeedIfEmptyAsync(AppDbContext db, IHostEnvironment env, ILogger logger, CancellationToken ct = default)
+    public static async Task EnsureSeedTasksAsync(AppDbContext db, IHostEnvironment env, ILogger logger, CancellationToken ct = default)
     {
-        if (await db.Tasks.IgnoreQueryFilters().AnyAsync(ct))
-        {
-            logger.LogInformation("Seeder: tasks already exist, skipping");
-            return;
-        }
-
         var agentsTasksDir = FindAgentsTasksDir(env.ContentRootPath);
         if (agentsTasksDir is null || !Directory.Exists(agentsTasksDir))
         {
-            logger.LogInformation("Seeder: no agents/tasks directory found, nothing to import");
+            logger.LogInformation("Seeder: no agents/tasks directory found, nothing to ensure");
             return;
         }
 
-        logger.LogInformation("Seeder: importing from {Dir}", agentsTasksDir);
+        logger.LogInformation("Seeder: ensuring seed tasks from {Dir}", agentsTasksDir);
 
         foreach (var taskDir in Directory.EnumerateDirectories(agentsTasksDir).OrderBy(d => d))
         {
             try
             {
-                await ImportOneTaskAsync(db, taskDir, logger, ct);
+                await EnsureOneTaskAsync(db, taskDir, logger, ct);
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "Seeder: failed to import {Dir}", taskDir);
+                logger.LogWarning(ex, "Seeder: failed to ensure {Dir}", taskDir);
             }
         }
 
         await db.SaveChangesAsync(ct);
-        logger.LogInformation("Seeder: import complete");
+        logger.LogInformation("Seeder: ensure complete");
     }
 
-    private static async Task ImportOneTaskAsync(AppDbContext db, string taskDir, ILogger logger, CancellationToken ct)
+    private static async Task EnsureOneTaskAsync(AppDbContext db, string taskDir, ILogger logger, CancellationToken ct)
     {
         var taskId = Path.GetFileName(taskDir);
         var taskMd = Path.Combine(taskDir, "task.md");
@@ -66,26 +71,58 @@ public static class AgentSeeder
             return;
         }
 
-        // Title: derive from the first line (first sentence up to 120 chars).
         var firstLine = taskText.Split('\n', 2)[0].Trim();
         var title = firstLine.Length <= 120 ? firstLine : firstLine[..117] + "...";
-
+        var tag = $"seed,{taskId}";
         var now = DateTime.UtcNow;
-        var task = new TaskItem
+
+        // IgnoreQueryFilters so we find soft-deleted rows too.
+        var existing = await db.Tasks
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(t => t.Tags == tag, ct);
+
+        TaskItem task;
+        if (existing is null)
         {
-            Title = string.IsNullOrWhiteSpace(title) ? taskId : title,
-            Description = taskText,
-            Priority = TaskPriority.Medium,
-            Status = Models.TaskStatus.Pending,
-            Tags = $"seed,{taskId}",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        db.Tasks.Add(task);
-        await db.SaveChangesAsync(ct);
+            task = new TaskItem
+            {
+                Title = string.IsNullOrWhiteSpace(title) ? taskId : title,
+                Description = taskText,
+                Priority = TaskPriority.Medium,
+                Status = Models.TaskStatus.Pending,
+                Tags = tag,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            db.Tasks.Add(task);
+            await db.SaveChangesAsync(ct);
+            logger.LogInformation("Seeder: inserted seed task {TaskId} as row #{Id}", taskId, task.Id);
+        }
+        else
+        {
+            task = existing;
+            if (task.IsDeleted)
+            {
+                task.IsDeleted = false;
+                task.UpdatedAt = now;
+                logger.LogInformation("Seeder: undeleted seed task {TaskId} (row #{Id})", taskId, task.Id);
+            }
+            else
+            {
+                logger.LogInformation("Seeder: seed task {TaskId} already present as row #{Id}", taskId, task.Id);
+            }
+            // Don't overwrite title/description; user may have edited them.
+        }
 
         var subtasksDir = Path.Combine(taskDir, "subtasks");
         if (!Directory.Exists(subtasksDir)) return;
+
+        // Pull existing subtask kinds for this task so we only insert new ones.
+        var existingKinds = await db.Subtasks
+            .IgnoreQueryFilters()
+            .Where(s => s.TaskItemId == task.Id)
+            .Select(s => s.Kind)
+            .ToListAsync(ct);
 
         foreach (var subFile in Directory.EnumerateFiles(subtasksDir, "*.json").OrderBy(f => f))
         {
@@ -115,6 +152,13 @@ public static class AgentSeeder
                 continue;
             }
 
+            if (existingKinds.Contains(kind))
+            {
+                // Already attached - don't duplicate, and don't clobber edits.
+                continue;
+            }
+            existingKinds.Add(kind);
+
             var subtask = new Subtask
             {
                 TaskItemId = task.Id,
@@ -124,6 +168,7 @@ public static class AgentSeeder
                 Temperature = parsed.ModelSettings?.Temperature ?? 0.0,
                 MaxTokens = parsed.ModelSettings?.MaxTokens ?? 256,
                 TopP = parsed.ModelSettings?.TopP,
+                SystemPrompt = string.IsNullOrWhiteSpace(parsed.SystemPrompt) ? null : parsed.SystemPrompt,
                 Notes = parsed.Notes,
                 CreatedAt = now,
                 UpdatedAt = now,
@@ -158,6 +203,7 @@ public static class AgentSeeder
         [JsonPropertyName("order")] public int Order { get; set; }
         [JsonPropertyName("question")] public string? Question { get; set; }
         [JsonPropertyName("model_settings")] public SeedModelSettings? ModelSettings { get; set; }
+        [JsonPropertyName("system_prompt")] public string? SystemPrompt { get; set; }
         [JsonPropertyName("notes")] public string? Notes { get; set; }
     }
 

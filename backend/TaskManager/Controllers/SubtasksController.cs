@@ -44,6 +44,7 @@ public class SubtasksController : ControllerBase
             Temperature = request.Temperature,
             MaxTokens = request.MaxTokens,
             TopP = request.TopP,
+            SystemPrompt = string.IsNullOrWhiteSpace(request.SystemPrompt) ? null : request.SystemPrompt,
             Notes = request.Notes,
             CreatedAt = now,
             UpdatedAt = now,
@@ -74,6 +75,11 @@ public class SubtasksController : ControllerBase
         if (request.Temperature.HasValue) s.Temperature = request.Temperature.Value;
         if (request.MaxTokens.HasValue) s.MaxTokens = request.MaxTokens.Value;
         if (request.TopP.HasValue) s.TopP = request.TopP.Value;
+        if (request.SystemPrompt is not null)
+        {
+            // Treat empty/whitespace as "clear this field".
+            s.SystemPrompt = string.IsNullOrWhiteSpace(request.SystemPrompt) ? null : request.SystemPrompt;
+        }
         if (request.Notes is not null) s.Notes = request.Notes;
         s.UpdatedAt = DateTime.UtcNow;
 
